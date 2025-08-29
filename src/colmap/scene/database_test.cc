@@ -275,27 +275,49 @@ TEST_P(ParameterizedDatabaseTests, PosePrior) {
   image.SetCameraId(camera.camera_id);
   image.SetImageId(database->WriteImage(image));
   EXPECT_EQ(database->NumPosePriors(), 0);
+
   PosePrior pose_prior(Eigen::Vector3d(0.1, 0.2, 0.3),
                        PosePrior::CoordinateSystem::CARTESIAN);
   EXPECT_TRUE(pose_prior.IsValid());
   EXPECT_FALSE(pose_prior.IsCovarianceValid());
   database->WritePosePrior(image.ImageId(), pose_prior);
   EXPECT_EQ(database->NumPosePriors(), 1);
+  
   auto read_pose_prior = database->ReadPosePrior(image.ImageId());
   EXPECT_EQ(read_pose_prior.position, pose_prior.position);
   EXPECT_EQ(read_pose_prior.coordinate_system, pose_prior.coordinate_system);
   EXPECT_TRUE(read_pose_prior.IsValid());
   EXPECT_FALSE(read_pose_prior.IsCovarianceValid());
-  pose_prior.position_covariance = Eigen::Matrix3d::Identity();
+  
+  // 3x3 covariance (position)
+  pose_prior.covariance = Eigen::Matrix3d::Identity();
   EXPECT_TRUE(pose_prior.IsCovarianceValid());
   database->UpdatePosePrior(image.ImageId(), pose_prior);
   read_pose_prior = database->ReadPosePrior(image.ImageId());
   EXPECT_EQ(read_pose_prior.position, pose_prior.position);
-  EXPECT_EQ(read_pose_prior.position_covariance,
-            pose_prior.position_covariance);
+  ASSERT_EQ(read_pose_prior.covariance.rows(), 3);
+  ASSERT_EQ(read_pose_prior.covariance.cols(), 3);
+  EXPECT_TRUE(read_pose_prior.covariance.isApprox(Eigen::Matrix3d::Identity()));
   EXPECT_EQ(read_pose_prior.coordinate_system, pose_prior.coordinate_system);
   EXPECT_TRUE(read_pose_prior.IsValid());
   EXPECT_TRUE(read_pose_prior.IsCovarianceValid());
+
+  // 6x6 covariance (position + rotation)
+  pose_prior.rotation = Eigen::Vector3d(0.01, -0.02, 0.03);
+  Eigen::Matrix<double,6,6> cov6 = Eigen::Matrix<double,6,6>::Zero();
+  cov6.topLeftCorner<3,3>() = Eigen::Matrix3d::Identity();
+  cov6.bottomRightCorner<3,3>() =
+      (Eigen::Vector3d(0.1, 0.2, 0.3).cwiseAbs2()).asDiagonal();
+  pose_prior.covariance = cov6;
+  EXPECT_TRUE(pose_prior.IsCovarianceValid());
+  database->UpdatePosePrior(image.ImageId(), pose_prior);
+  read_pose_prior = database->ReadPosePrior(image.ImageId());
+  EXPECT_TRUE(read_pose_prior.HasRotation());
+  EXPECT_TRUE(read_pose_prior.rotation.isApprox(pose_prior.rotation));
+  ASSERT_EQ(read_pose_prior.covariance.rows(), 6);
+  ASSERT_EQ(read_pose_prior.covariance.cols(), 6);
+  EXPECT_TRUE(read_pose_prior.covariance.isApprox(cov6));
+
   database->ClearPosePriors();
   EXPECT_EQ(database->NumPosePriors(), 0);
 }
