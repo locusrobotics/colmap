@@ -32,6 +32,9 @@
 #include "colmap/controllers/incremental_pipeline.h"
 #include "colmap/scene/reconstruction.h"
 
+#include <Eigen/Core>
+#include <type_traits>
+
 namespace colmap {
 
 void RunPointTriangulatorImpl(
@@ -52,5 +55,28 @@ int RunPosePriorMapper(int argc, char** argv);
 int RunPointFiltering(int argc, char** argv);
 int RunPointTriangulator(int argc, char** argv);
 int RunRigBundleAdjuster(int argc, char** argv);
+
+template<int S>
+inline void UpdateDatabasePosePriorsCovariance(
+    const std::string& database_path,
+    const Eigen::Matrix<double, S, S>& covariance) {
+  static_assert(S == 3 || S == 6,
+                "UpdateDatabasePosePriorsCovariance only supports 3x3 or 6x6");
+
+  auto database = Database::Open(database_path);
+  DatabaseTransaction database_transaction(database.get());
+
+  LOG(INFO) << "Setting pose prior covariance (" << S << "x" << S
+            << ") for all images:\n"
+            << covariance << '\n';
+
+  for (const auto& image : database->ReadAllImages()) {
+    if (database->ExistsPosePrior(image.ImageId())) {
+      PosePrior prior = database->ReadPosePrior(image.ImageId());
+      prior.covariance = covariance;
+      database->UpdatePosePrior(image.ImageId(), prior);
+    }
+  }
+}
 
 }  // namespace colmap

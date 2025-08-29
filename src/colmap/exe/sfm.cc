@@ -43,6 +43,8 @@
 #include "colmap/util/misc.h"
 #include "colmap/util/opengl_utils.h"
 
+#include <Eigen/Geometry>
+
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 
@@ -59,24 +61,6 @@ ExtractExistingImages(const Reconstruction& reconstruction) {
         reconstruction.Image(image_id).ProjectionCenter());
   }
   return {std::move(fixed_image_ids), std::move(orig_fixed_image_positions)};
-}
-
-void UpdateDatabasePosePriorsCovariance(const std::string& database_path,
-                                        const Eigen::Matrix3d& covariance) {
-  auto database = Database::Open(database_path);
-  DatabaseTransaction database_transaction(database.get());
-
-  LOG(INFO)
-      << "Setting up database pose priors with the same covariance matrix: \n"
-      << covariance << '\n';
-
-  for (const auto& image : database->ReadAllImages()) {
-    if (database->ExistsPosePrior(image.ImageId())) {
-      PosePrior prior = database->ReadPosePrior(image.ImageId());
-      prior.covariance = covariance;
-      database->UpdatePosePrior(image.ImageId(), prior);
-    }
-  }
 }
 
 }  // namespace
@@ -352,6 +336,9 @@ int RunPosePriorMapper(int argc, char** argv) {
   double prior_position_std_x = 1.;
   double prior_position_std_y = 1.;
   double prior_position_std_z = 1.;
+  double prior_rotation_std_x = 0.;
+  double prior_rotation_std_y = 0.;
+  double prior_rotation_std_z = 0.;
 
   OptionManager options;
   options.AddDatabaseOptions();
@@ -365,11 +352,15 @@ int RunPosePriorMapper(int argc, char** argv) {
   options.AddDefaultOption(
       "overwrite_priors_covariance",
       &overwrite_priors_covariance,
-      "Priors covariance read from database. If true, overwrite the priors "
-      "covariance using the follwoing prior_position_std_... options");
+      "If true, overwrite pose prior covariance for all images. "
+      "If any prior_rotation_std_* > 0, writes a 6x6 covariance "
+      "[px,py,pz, rx,ry,rz]; otherwise writes 3x3 position-only.");
   options.AddDefaultOption("prior_position_std_x", &prior_position_std_x);
   options.AddDefaultOption("prior_position_std_y", &prior_position_std_y);
   options.AddDefaultOption("prior_position_std_z", &prior_position_std_z);
+  options.AddDefaultOption("prior_rotation_std_x", &prior_rotation_std_x);
+  options.AddDefaultOption("prior_rotation_std_y", &prior_rotation_std_y);
+  options.AddDefaultOption("prior_rotation_std_z", &prior_rotation_std_z);
   options.AddDefaultOption("use_robust_loss_on_prior_position",
                            &options.mapper->use_robust_loss_on_prior_position);
   options.AddDefaultOption("prior_position_loss_scale",
@@ -382,12 +373,22 @@ int RunPosePriorMapper(int argc, char** argv) {
   }
 
   if (overwrite_priors_covariance) {
-    const Eigen::Matrix3d covariance =
-        Eigen::Vector3d(
-            prior_position_std_x, prior_position_std_y, prior_position_std_z)
-            .cwiseAbs2()
-            .asDiagonal();
-    UpdateDatabasePosePriorsCovariance(*options.database_path, covariance);
+    const Eigen::Vector3d pos_std = Eigen::Vector3d(
+        prior_position_std_x, prior_position_std_y, prior_position_std_z).cwiseAbs();
+    const Eigen::Vector3d rot_std = Eigen::Vector3d(
+        prior_rotation_std_x, prior_rotation_std_y, prior_rotation_std_z).cwiseAbs();
+
+    const bool write_6d = (rot_std.maxCoeff() > 0.0);
+
+    if (write_6d) {
+      Eigen::Matrix<double,6,6> cov = Eigen::Matrix<double,6,6>::Zero();
+      cov.topLeftCorner<3,3>()     = pos_std.cwiseProduct(pos_std).asDiagonal();
+      cov.bottomRightCorner<3,3>() = rot_std.cwiseProduct(rot_std).asDiagonal();
+      UpdateDatabasePosePriorsCovariance<6>(*options.database_path, cov);
+    } else {
+      Eigen::Matrix3d cov3 = pos_std.cwiseProduct(pos_std).asDiagonal();
+      UpdateDatabasePosePriorsCovariance<3>(*options.database_path, cov3);
+    }
   }
 
   auto reconstruction_manager = std::make_shared<ReconstructionManager>();
