@@ -722,10 +722,28 @@ class SqliteDatabase : public Database {
     if (rc == SQLITE_ROW) {
       prior.position = ReadStaticMatrixBlob<Eigen::Vector3d>(
           sql_stmt_read_pose_prior_, rc, 1);
+
       prior.coordinate_system = static_cast<PosePrior::CoordinateSystem>(
           sqlite3_column_int64(sql_stmt_read_pose_prior_, 2));
-      prior.position_covariance = ReadStaticMatrixBlob<Eigen::Matrix3d>(
-          sql_stmt_read_pose_prior_, rc, 3);
+
+      if (sqlite3_column_type(sql_stmt_read_pose_prior_, 3) == SQLITE_BLOB) {
+        prior.rotation = ReadStaticMatrixBlob<Eigen::Vector3d>(
+            sql_stmt_read_pose_prior_, rc, 3);
+      } 
+
+      if (sqlite3_column_type(sql_stmt_read_pose_prior_, 4) == SQLITE_BLOB) {
+        const int nbytes = sqlite3_column_bytes(sql_stmt_read_pose_prior_, 4);
+        if (nbytes == static_cast<int>(sizeof(double)) * 3 * 3) {
+          const Eigen::Matrix3d cov3 =
+              ReadStaticMatrixBlob<Eigen::Matrix3d>(sql_stmt_read_pose_prior_, rc, 4);
+          prior.covariance = cov3;
+        } else if (nbytes == static_cast<int>(sizeof(double)) * 6 * 6) {
+          const Eigen::Matrix<double, 6, 6> cov6 =
+              ReadStaticMatrixBlob<Eigen::Matrix<double, 6, 6>>(sql_stmt_read_pose_prior_, rc, 4);
+          prior.covariance = cov6;
+        } else {
+        }
+      }
     }
     return prior;
   }
@@ -1058,18 +1076,35 @@ class SqliteDatabase : public Database {
         sqlite3_last_insert_rowid(THROW_CHECK_NOTNULL(database_)));
   }
 
-  void WritePosePrior(const image_t image_id,
-                      const PosePrior& pose_prior) override {
+  void WritePosePrior(const image_t image_id, const PosePrior& pose_prior) override {
     Sqlite3StmtContext context(sql_stmt_write_pose_prior_);
 
     SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_write_pose_prior_, 1, image_id));
+
     WriteStaticMatrixBlob(sql_stmt_write_pose_prior_, pose_prior.position, 2);
+
     SQLITE3_CALL(sqlite3_bind_int64(
-        sql_stmt_write_pose_prior_,
-        3,
+        sql_stmt_write_pose_prior_, 3,
         static_cast<sqlite3_int64>(pose_prior.coordinate_system)));
-    WriteStaticMatrixBlob(
-        sql_stmt_write_pose_prior_, pose_prior.position_covariance, 4);
+
+    if (pose_prior.HasRotation()) {
+      WriteStaticMatrixBlob(sql_stmt_write_pose_prior_, pose_prior.rotation, 4);
+    } else {
+      SQLITE3_CALL(sqlite3_bind_null(sql_stmt_write_pose_prior_, 4));
+    }
+
+    if (pose_prior.covariance.rows() == 3 && pose_prior.covariance.cols() == 3 &&
+        pose_prior.covariance.allFinite()) {
+      const Eigen::Matrix3d cov3 = pose_prior.covariance;
+      WriteStaticMatrixBlob(sql_stmt_write_pose_prior_, cov3, 5);
+    } else if (pose_prior.covariance.rows() == 6 && pose_prior.covariance.cols() == 6 &&
+              pose_prior.covariance.allFinite()) {
+      const Eigen::Matrix<double, 6, 6> cov6 = pose_prior.covariance;
+      WriteStaticMatrixBlob(sql_stmt_write_pose_prior_, cov6, 5);
+    } else {
+      SQLITE3_CALL(sqlite3_bind_null(sql_stmt_write_pose_prior_, 5));
+    }
+
     SQLITE3_CALL(sqlite3_step(sql_stmt_write_pose_prior_));
   }
 
@@ -1288,13 +1323,30 @@ class SqliteDatabase : public Database {
     Sqlite3StmtContext context(sql_stmt_update_pose_prior_);
 
     WriteStaticMatrixBlob(sql_stmt_update_pose_prior_, pose_prior.position, 1);
+
     SQLITE3_CALL(sqlite3_bind_int64(
-        sql_stmt_update_pose_prior_,
-        2,
+        sql_stmt_update_pose_prior_, 2,
         static_cast<sqlite3_int64>(pose_prior.coordinate_system)));
-    WriteStaticMatrixBlob(
-        sql_stmt_update_pose_prior_, pose_prior.position_covariance, 3);
-    SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_update_pose_prior_, 4, image_id));
+
+    if (pose_prior.HasRotation()) {
+      WriteStaticMatrixBlob(sql_stmt_update_pose_prior_, pose_prior.rotation, 3);
+    } else {
+      SQLITE3_CALL(sqlite3_bind_null(sql_stmt_update_pose_prior_, 3));
+    }
+
+    if (pose_prior.covariance.rows() == 3 && pose_prior.covariance.cols() == 3 &&
+        pose_prior.covariance.allFinite()) {
+      const Eigen::Matrix3d cov3 = pose_prior.covariance;
+      WriteStaticMatrixBlob(sql_stmt_update_pose_prior_, cov3, 4);
+    } else if (pose_prior.covariance.rows() == 6 && pose_prior.covariance.cols() == 6 &&
+              pose_prior.covariance.allFinite()) {
+      const Eigen::Matrix<double, 6, 6> cov6 = pose_prior.covariance;
+      WriteStaticMatrixBlob(sql_stmt_update_pose_prior_, cov6, 4);
+    } else {
+      SQLITE3_CALL(sqlite3_bind_null(sql_stmt_update_pose_prior_, 4));
+    }
+
+    SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_update_pose_prior_, 5, image_id));
 
     SQLITE3_CALL(sqlite3_step(sql_stmt_update_pose_prior_));
   }
@@ -1658,7 +1710,7 @@ class SqliteDatabase : public Database {
                      &sql_stmt_update_image_);
     prepare_sql_stmt(
         "UPDATE pose_priors SET position=?, coordinate_system=?, "
-        "position_covariance=? WHERE image_id=?;",
+        "covariance=? WHERE image_id=?;",
         &sql_stmt_update_pose_prior_);
 
     //////////////////////////////////////////////////////////////////////////////
@@ -1738,7 +1790,7 @@ class SqliteDatabase : public Database {
     //////////////////////////////////////////////////////////////////////////////
     prepare_sql_stmt(
         "INSERT INTO pose_priors(image_id, position, coordinate_system, "
-        "position_covariance) VALUES(?, ?, ?, ?);",
+        "covariance) VALUES(?, ?, ?, ?);",
         &sql_stmt_write_pose_prior_);
     prepare_sql_stmt(
         "INSERT INTO keypoints(image_id, rows, cols, data) VALUES(?, ?, ?, ?);",
@@ -1892,7 +1944,7 @@ class SqliteDatabase : public Database {
         "   (image_id                   INTEGER  PRIMARY KEY  NOT NULL,"
         "    position                   BLOB,"
         "    coordinate_system          INTEGER               NOT NULL,"
-        "    position_covariance        BLOB,"
+        "    covariance                 BLOB,"
         "    FOREIGN KEY(image_id) REFERENCES images(image_id) ON DELETE "
         "CASCADE);";
 
@@ -1989,21 +2041,27 @@ class SqliteDatabase : public Database {
                    nullptr);
     }
 
-    if (!ExistsColumn("pose_priors", "position_covariance")) {
-      // Create position_covariance matrix column
+    if (!ExistsColumn("pose_priors", "rotation")) {
       SQLITE3_EXEC(
           database_,
-          "ALTER TABLE pose_priors ADD COLUMN position_covariance BLOB "
-          "DEFAULT NULL;",
+          "ALTER TABLE pose_priors ADD COLUMN rotation BLOB DEFAULT NULL;",
+          nullptr);
+    }
+
+    if (!ExistsColumn("pose_priors", "covariance")) {
+      SQLITE3_EXEC(
+          database_,
+          "ALTER TABLE pose_priors ADD COLUMN covariance BLOB DEFAULT NULL;",
           nullptr);
 
-      // Set position_covariance column to NaN matrices
-      const std::string update_sql =
-          "UPDATE pose_priors SET position_covariance = ?;";
-      sqlite3_stmt* update_stmt;
-      SQLITE3_CALL(sqlite3_prepare_v2(
-          database_, update_sql.c_str(), -1, &update_stmt, 0));
-      WriteStaticMatrixBlob(update_stmt, PosePrior().position_covariance, 1);
+      const std::string update_sql = "UPDATE pose_priors SET covariance = ?;";
+      sqlite3_stmt* update_stmt = nullptr;
+      SQLITE3_CALL(sqlite3_prepare_v2(database_, update_sql.c_str(), -1, &update_stmt, 0));
+
+      const Eigen::Matrix3d nan3 =
+          Eigen::Matrix3d::Constant(std::numeric_limits<double>::quiet_NaN());
+      WriteStaticMatrixBlob(update_stmt, nan3, 1);
+
       SQLITE3_CALL(sqlite3_step(update_stmt));
       SQLITE3_CALL(sqlite3_finalize(update_stmt));
     }

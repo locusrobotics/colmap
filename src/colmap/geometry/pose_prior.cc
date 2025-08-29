@@ -34,10 +34,24 @@ namespace colmap {
 std::ostream& operator<<(std::ostream& stream, const PosePrior& prior) {
   const static Eigen::IOFormat kVecFmt(
       Eigen::StreamPrecision, Eigen::DontAlignCols, ", ", ", ");
-  stream << "PosePrior(position=[" << prior.position.format(kVecFmt)
-         << "], position_covariance=["
-         << prior.position_covariance.format(kVecFmt) << "], coordinate_system="
-         << PosePrior::CoordinateSystemToString(prior.coordinate_system) << ")";
+  const static Eigen::IOFormat kMatFmt(
+      Eigen::StreamPrecision, Eigen::DontAlignCols, ", ", ", ", "[", "]", "[", "]");
+
+  stream << "PosePrior(position=[" << prior.position.format(kVecFmt) << "]";
+
+  if (prior.HasRotation()) {
+    stream << ", rotation=[" << prior.rotation.format(kVecFmt) << "]";
+  } else {
+    stream << ", rotation=<none>";
+  }
+
+  stream << ", covariance(" << prior.covariance.rows() << "x"
+         << prior.covariance.cols() << ")="
+         << prior.covariance.format(kMatFmt)
+         << ", coordinate_system="
+         << PosePrior::CoordinateSystemToString(prior.coordinate_system)
+         << ")";
+
   return stream;
 }
 

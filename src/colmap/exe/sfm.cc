@@ -73,7 +73,7 @@ void UpdateDatabasePosePriorsCovariance(const std::string& database_path,
   for (const auto& image : database->ReadAllImages()) {
     if (database->ExistsPosePrior(image.ImageId())) {
       PosePrior prior = database->ReadPosePrior(image.ImageId());
-      prior.position_covariance = covariance;
+      prior.covariance = covariance;
       database->UpdatePosePrior(image.ImageId(), prior);
     }
   }

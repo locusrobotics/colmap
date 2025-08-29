@@ -37,6 +37,7 @@
 #include "colmap/util/threading.h"
 
 #include <iomanip>
+#include <Eigen/Geometry>
 
 namespace colmap {
 
@@ -988,8 +989,8 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
   }
 
   void AddPosePriorToProblem(image_t image_id,
-                             const PosePrior& prior,
-                             Reconstruction& reconstruction) {
+                            const PosePrior& prior,
+                            Reconstruction& reconstruction) {
     if (!prior.IsValid() || !prior.IsCovarianceValid()) {
       LOG(ERROR) << "Could not add prior for image #" << image_id;
       return;
@@ -997,31 +998,60 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
 
     Image& image = reconstruction.Image(image_id);
     if (!image.HasTrivialFrame()) {
-      // TODO(jsch): Only enforce the pose prior on the reference sensor. This
-      // fails if only a non-reference sensor image has a corresponding pose
-      // prior stored. This will be replaced with dedicated modeling of a
-      // GNSS/GPS sensor.
       return;
     }
 
     THROW_CHECK(image.HasPose());
     Rigid3d& cam_from_world = image.FramePtr()->RigFromWorld();
 
-    std::shared_ptr<ceres::Problem>& problem =
-        default_bundle_adjuster_->Problem();
+    std::shared_ptr<ceres::Problem>& problem = default_bundle_adjuster_->Problem();
 
     double* cam_from_world_translation = cam_from_world.translation.data();
     if (!problem->HasParameterBlock(cam_from_world_translation)) {
       return;
     }
 
-    // cam_from_world.rotation is normalized in AddImageToProblem()
     double* cam_from_world_rotation = cam_from_world.rotation.coeffs().data();
 
+    const Eigen::Vector3d Cw_prior = normalized_from_metric_ * prior.position;
+
+    if (prior.HasRotation() &&
+        prior.covariance.rows() == 6 && prior.covariance.cols() == 6) {
+      const Eigen::Vector3d r = prior.rotation;
+      const double theta = r.norm();
+      Eigen::Quaterniond Rcw_prior = Eigen::Quaterniond::Identity();
+      if (theta > 0.0) {
+        Rcw_prior = Eigen::Quaterniond(Eigen::AngleAxisd(theta, r / theta));
+        Rcw_prior.normalize();
+      }
+      // cam_from_world translation -> t = -R * C 
+      const Eigen::Vector3d tcw_prior = -(Rcw_prior * Cw_prior);
+      const Rigid3d cam_from_world_prior(Rcw_prior, tcw_prior);
+
+      problem->AddResidualBlock(
+          CovarianceWeightedCostFunctor<AbsolutePosePriorCostFunctor>::Create(
+              prior.covariance,
+              cam_from_world_prior),
+          prior_loss_function_.get(),
+          cam_from_world_rotation,
+          cam_from_world_translation);
+      return;
+    }
+
+    // Falls back to position prior only.
+    Eigen::Matrix3d pos_cov;
+    if (prior.covariance.rows() == 3 && prior.covariance.cols() == 3) {
+      pos_cov = prior.covariance;
+    } else if (prior.covariance.rows() == 6 && prior.covariance.cols() == 6) {
+      pos_cov = prior.covariance.topLeftCorner<3,3>();
+    } else {
+      LOG(ERROR) << "Pose prior covariance has invalid size for image #" << image_id;
+      return;
+    }
+
     problem->AddResidualBlock(
-        CovarianceWeightedCostFunctor<AbsolutePosePositionPriorCostFunctor>::
-            Create(prior.position_covariance,
-                   normalized_from_metric_ * prior.position),
+        CovarianceWeightedCostFunctor<AbsolutePosePositionPriorCostFunctor>::Create(
+            pos_cov, Cw_prior),
         prior_loss_function_.get(),
         cam_from_world_rotation,
         cam_from_world_translation);
@@ -1034,9 +1064,17 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
       size_t num_valid_covs = 0;
       for (const auto& [_, pose_prior] : pose_priors_) {
         if (pose_prior.IsCovarianceValid()) {
+          Eigen::Matrix3d pos_cov;
+          if (pose_prior.covariance.rows() == 3 && pose_prior.covariance.cols() == 3) {
+            pos_cov = pose_prior.covariance;
+          } else if (pose_prior.covariance.rows() == 6 && pose_prior.covariance.cols() == 6) {
+            pos_cov = pose_prior.covariance.topLeftCorner<3,3>();
+          } else {
+            continue;
+          }
+
           const double max_stddev =
-              std::sqrt(Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d>(
-                            pose_prior.position_covariance)
+              std::sqrt(Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d>(pos_cov)
                             .eigenvalues()
                             .maxCoeff());
           max_stddev_sum += max_stddev;
@@ -1047,8 +1085,7 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
         LOG(WARNING) << "No pose priors with valid covariance found.";
         return false;
       }
-      // Set max error at the 3 sigma confidence interval. Assumes no
-      // outliers.
+
       ransac_options.max_error = 3 * max_stddev_sum / num_valid_covs;
     }
 

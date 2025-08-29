@@ -227,4 +227,5 @@ void BindBundleAdjuster(py::module& m) {
         "config"_a,
         "pose_priors"_a,
         "reconstruction"_a);
+
 }

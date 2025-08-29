@@ -34,6 +34,7 @@
 #include "colmap/util/types.h"
 
 #include <ostream>
+#include <limits>
 
 #include <Eigen/Core>
 
@@ -48,28 +49,81 @@ struct PosePrior {
                   CARTESIAN   // = 1
   );
 
+  // Position prior (meters).
   Eigen::Vector3d position =
       Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
-  Eigen::Matrix3d position_covariance =
-      Eigen::Matrix3d::Constant(std::numeric_limits<double>::quiet_NaN());
+
+  // Optional rotation prior in so(3) tangent / rotation-vector form (radians).
+  // If any component is non-finite, rotation is considered "not provided".
+  Eigen::Vector3d rotation =
+      Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
+
+  // Unified covariance:
+  // - 3x3 -> position-only covariance
+  // - 6x6 -> joint [px,py,pz, rx,ry,rz] covariance
+  // Any other size is invalid.
+  Eigen::MatrixXd covariance =
+      Eigen::MatrixXd::Constant(3, 3, std::numeric_limits<double>::quiet_NaN());
+
   CoordinateSystem coordinate_system = CoordinateSystem::UNDEFINED;
 
   PosePrior() = default;
-  explicit PosePrior(const Eigen::Vector3d& position) : position(position) {}
-  PosePrior(const Eigen::Vector3d& position, const CoordinateSystem system)
-      : position(position), coordinate_system(system) {}
-  PosePrior(const Eigen::Vector3d& position, const Eigen::Matrix3d& covariance)
-      : position(position), position_covariance(covariance) {}
+
+  // Position-only constructors
+  explicit PosePrior(const Eigen::Vector3d& position)
+      : position(position) {}
+
   PosePrior(const Eigen::Vector3d& position,
-            const Eigen::Matrix3d& covariance,
+            const CoordinateSystem system)
+      : position(position), coordinate_system(system) {}
+
+  PosePrior(const Eigen::Vector3d& position,
+            const Eigen::Matrix3d& pos_cov)
+      : position(position), covariance(pos_cov) {}
+
+  PosePrior(const Eigen::Vector3d& position,
+            const Eigen::Matrix3d& pos_cov,
+            const CoordinateSystem system)
+      : position(position), covariance(pos_cov), coordinate_system(system) {}
+
+  // Position + rotation constructors (6x6 covariance)
+  PosePrior(const Eigen::Vector3d& position,
+            const Eigen::Vector3d& rotation)
+      : position(position), rotation(rotation),
+        covariance(Eigen::MatrixXd::Constant(
+            6, 6, std::numeric_limits<double>::quiet_NaN())) {}
+
+  PosePrior(const Eigen::Vector3d& position,
+            const Eigen::Vector3d& rotation,
+            const CoordinateSystem system)
+      : position(position), rotation(rotation),
+        covariance(Eigen::MatrixXd::Constant(
+            6, 6, std::numeric_limits<double>::quiet_NaN())),
+        coordinate_system(system) {}
+
+  PosePrior(const Eigen::Vector3d& position,
+            const Eigen::Vector3d& rotation,
+            const Eigen::Matrix<double, 6, 6>& joint_cov)
+      : position(position), rotation(rotation), covariance(joint_cov) {}
+
+  PosePrior(const Eigen::Vector3d& position,
+            const Eigen::Vector3d& rotation,
+            const Eigen::Matrix<double, 6, 6>& joint_cov,
             const CoordinateSystem system)
       : position(position),
-        position_covariance(covariance),
+        rotation(rotation),
+        covariance(joint_cov),
         coordinate_system(system) {}
 
   inline bool IsValid() const { return position.allFinite(); }
+
+  inline bool HasRotation() const { return rotation.allFinite(); }
+
   inline bool IsCovarianceValid() const {
-    return position_covariance.allFinite();
+    const bool size_ok =
+        (covariance.rows() == 3 && covariance.cols() == 3) ||
+        (covariance.rows() == 6 && covariance.cols() == 6);
+    return size_ok && covariance.allFinite();
   }
 
   inline bool operator==(const PosePrior& other) const;
@@ -78,14 +132,19 @@ struct PosePrior {
 
 std::ostream& operator<<(std::ostream& stream, const PosePrior& prior);
 
+// Equality operators compare coordinate_system, position, rotation, and covariance (including size).
 bool PosePrior::operator==(const PosePrior& other) const {
-  return coordinate_system == other.coordinate_system &&
-         position == other.position &&
-         position_covariance == other.position_covariance;
+  if (coordinate_system != other.coordinate_system) return false;
+  if (position != other.position) return false;
+  if (HasRotation() != other.HasRotation()) return false;
+  if (HasRotation() && rotation != other.rotation) return false;
+  if (covariance.rows() != other.covariance.rows() ||
+      covariance.cols() != other.covariance.cols()) {
+    return false;
+  }
+  return covariance == other.covariance;
 }
 
-bool PosePrior::operator!=(const PosePrior& other) const {
-  return !(*this == other);
-}
+bool PosePrior::operator!=(const PosePrior& other) const { return !(*this == other); }
 
 }  // namespace colmap

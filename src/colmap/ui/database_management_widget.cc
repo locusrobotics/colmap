@@ -790,27 +790,27 @@ void PosePriorsTab::Reload(const std::shared_ptr<Database>& database) {
     table_widget_->setItem(
         row_idx,
         5,
-        new QTableWidgetItem(QString::number(prior.position_covariance(0, 0))));
+        new QTableWidgetItem(QString::number(prior.covariance(0, 0))));
     table_widget_->setItem(
         row_idx,
         6,
-        new QTableWidgetItem(QString::number(prior.position_covariance(1, 1))));
+        new QTableWidgetItem(QString::number(prior.covariance(1, 1))));
     table_widget_->setItem(
         row_idx,
         7,
-        new QTableWidgetItem(QString::number(prior.position_covariance(2, 2))));
+        new QTableWidgetItem(QString::number(prior.covariance(2, 2))));
     table_widget_->setItem(
         row_idx,
         8,
-        new QTableWidgetItem(QString::number(prior.position_covariance(0, 1))));
+        new QTableWidgetItem(QString::number(prior.covariance(0, 1))));
     table_widget_->setItem(
         row_idx,
         9,
-        new QTableWidgetItem(QString::number(prior.position_covariance(0, 2))));
+        new QTableWidgetItem(QString::number(prior.covariance(0, 2))));
     table_widget_->setItem(
         row_idx,
         10,
-        new QTableWidgetItem(QString::number(prior.position_covariance(1, 2))));
+        new QTableWidgetItem(QString::number(prior.covariance(1, 2))));
     ++row_idx;
   }
   table_widget_->resizeColumnsToContents();

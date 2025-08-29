@@ -390,11 +390,11 @@ void SynthesizeDataset(const SyntheticDatasetOptions& options,
                 RandomGaussian<double>(0, options.prior_position_stddev),
                 RandomGaussian<double>(0, options.prior_position_stddev),
                 RandomGaussian<double>(0, options.prior_position_stddev));
-            noisy_prior.position_covariance = options.prior_position_stddev *
-                                              options.prior_position_stddev *
-                                              Eigen::Matrix3d::Identity();
+            noisy_prior.covariance = options.prior_position_stddev *
+                                     options.prior_position_stddev *
+                                     Eigen::Matrix3d::Identity();
           } else {
-            noisy_prior.position_covariance = Eigen::Matrix3d::Identity();
+            noisy_prior.covariance = Eigen::Matrix3d::Identity();
           }
 
           if (options.use_geographic_coords_prior) {
