@@ -63,6 +63,23 @@ Getting Started
    with a single click or command.
 
 
+Pose-Prior Frustum Matcher (Fork Extension)
+-------------------------------------------
+
+This fork includes a Python frustum-aware pair selector in
+`frustum_matcher/` for self-similar environments.
+
+1. Generate candidate pairs from pose priors:
+  `python -m frustum_matcher.run_frustum_matching --database_path /path/to/database.db --output_path /path/to/pairs.txt`
+2. Run synthetic matcher tests:
+  `python scripts/python/test_frustum_matcher.py`
+3. Optionally run pair import + matching from the same command:
+  add `--run_matching --colmap_bin colmap`
+
+The matcher outputs a text pair list intended for
+`colmap matches_importer --match_type pairs`.
+
+
 Documentation
 -------------
 
